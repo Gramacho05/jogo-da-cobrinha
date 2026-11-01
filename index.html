@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jogo da cobrinha</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 16px;
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  h1 { font-size: 1.3rem; margin: 0; }
+  .scores { display: flex; gap: 28px; color: var(--muted); font-size: .95rem; }
+  .scores strong { color: var(--text); font-variant-numeric: tabular-nums; }
+  .board { position: relative; width: min(92vw, 420px); aspect-ratio: 1; }
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 8% 16px 16px;
+    text-align: center;
+    background: rgba(13, 17, 23, .5);
+    border-radius: 10px;
+    cursor: pointer;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 92%;
+  }
+  .overlay[hidden] { display: none; }
+  .overlay h2 { margin: 0; font-size: 1.3rem; }
+  .overlay p { margin: 0; color: var(--muted); font-size: .95rem; }
+  .help { color: var(--muted); font-size: .85rem; text-align: center; margin: 0; }
+  .dpad {
+    display: none;
+    grid-template-columns: repeat(3, 56px);
+    grid-template-areas: ". up ." "left down right";
+    gap: 8px;
+  }
+  .dpad button {
+    height: 56px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 1.2rem;
+  }
+  .dpad button:active { background: #21262d; }
+  .dpad [data-dir="up"] { grid-area: up; }
+  .dpad [data-dir="left"] { grid-area: left; }
+  .dpad [data-dir="down"] { grid-area: down; }
+  .dpad [data-dir="right"] { grid-area: right; }
+  @media (hover: none) and (pointer: coarse) { .dpad { display: grid; } }
+</style>
+</head>
+<body>
+  <h1>Jogo da cobrinha</h1>
+
+  <div class="scores">
+    <span>Pontos: <strong id="score">0</strong></span>
+    <span>Recorde: <strong id="best">0</strong></span>
+  </div>
+
+  <div class="board" id="board">
+    <canvas id="game" aria-label="Tabuleiro do jogo da cobrinha"></canvas>
+    <div class="overlay" id="overlay">
+      <div class="card">
+        <h2 id="overlay-title">Jogo da cobrinha</h2>
+        <p id="overlay-text">Pressione uma seta ou toque para começar</p>
+      </div>
+    </div>
+  </div>
+
+  <p class="help">Setas ou W A S D para mover · Espaço para pausar · No celular, deslize na tela</p>
+
+  <div class="dpad" aria-label="Controles">
+    <button type="button" data-dir="up" aria-label="Cima">▲</button>
+    <button type="button" data-dir="left" aria-label="Esquerda">◀</button>
+    <button type="button" data-dir="down" aria-label="Baixo">▼</button>
+    <button type="button" data-dir="right" aria-label="Direita">▶</button>
+  </div>
+
+<script>
+  const COLS = 20, ROWS = 20, CELL = 24;
+  const canvas = document.getElementById('game');
+  canvas.width = COLS * CELL;
+  canvas.height = ROWS * CELL;
+  const ctx = canvas.getContext('2d');
+
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const overlay = document.getElementById('overlay');
+  const overlayTitle = document.getElementById('overlay-title');
+  const overlayText = document.getElementById('overlay-text');
+
+  const DIRS = {
+    up: { x: 0, y: -1 },
+    down: { x: 0, y: 1 },
+    left: { x: -1, y: 0 },
+    right: { x: 1, y: 0 }
+  };
+
+  let state;
+  let timer = null;
+  let pending = [];
+  let best = 0;
+
+  try { best = Number(localStorage.getItem('cobrinha-recorde')) || 0; } catch (e) { best = 0; }
+  bestEl.textContent = best;
+
+  function isOpposite(a, b) { return a.x + b.x === 0 && a.y + b.y === 0; }
+  function isSame(a, b) { return a.x === b.x && a.y === b.y; }
+
+  function spawnFood() {
+    const free = [];
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        if (!state.snake.some(s => s.x === x && s.y === y)) free.push({ x, y });
+      }
+    }
+    if (free.length === 0) return null;
+    return free[Math.floor(Math.random() * free.length)];
+  }
+
+  function showOverlay(title, text) {
+    overlayTitle.textContent = title;
+    overlayText.textContent = text;
+    overlay.hidden = false;
+  }
+  function hideOverlay() { overlay.hidden = true; }
+
+  function updateScore() {
+    scoreEl.textContent = state.score;
+    bestEl.textContent = best;
+  }
+
+  function reset() {
+    clearTimeout(timer);
+    const mid = Math.floor(ROWS / 2);
+    state = {
+      snake: [{ x: 6, y: mid }, { x: 5, y: mid }, { x: 4, y: mid }],
+      dir: DIRS.right,
+      food: null,
+      score: 0,
+      status: 'ready'
+    };
+    pending = [];
+    state.food = spawnFood();
+    updateScore();
+    draw();
+    showOverlay('Jogo da cobrinha', 'Pressione uma seta ou toque para começar');
+  }
+
+  function speed() {
+    return Math.max(60, 120 - Math.floor(state.score / 4) * 8);
+  }
+
+  function start() {
+    if (state.status === 'over') reset();
+    state.status = 'running';
+    hideOverlay();
+    clearTimeout(timer);
+    timer = setTimeout(loop, speed());
+  }
+
+  function togglePause() {
+    if (state.status === 'running') {
+      state.status = 'paused';
+      clearTimeout(timer);
+      showOverlay('Pausado', 'Pressione Espaço ou toque para continuar');
+    } else if (state.status === 'paused') {
+      start();
+    }
+  }
+
+  function finish(title, text) {
+    state.status = 'over';
+    clearTimeout(timer);
+    if (state.score > best) {
+      best = state.score;
+      try { localStorage.setItem('cobrinha-recorde', String(best)); } catch (e) {}
+    }
+    updateScore();
+    draw();
+    showOverlay(title, text + ' Toque ou pressione Espaço para jogar de novo.');
+  }
+
+  function loop() {
+    tick();
+    if (state.status === 'running') timer = setTimeout(loop, speed());
+  }
+
+  function tick() {
+    if (state.status !== 'running') return;
+
+    if (pending.length) {
+      const next = pending.shift();
+      if (!isOpposite(next, state.dir)) state.dir = next;
+    }
+
+    const head = state.snake[0];
+    const nx = head.x + state.dir.x;
+    const ny = head.y + state.dir.y;
+
+    if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) {
+      return finish('Fim de jogo', 'Você bateu na parede. Pontos: ' + state.score + '.');
+    }
+
+    const eating = state.food && nx === state.food.x && ny === state.food.y;
+    // Se não vai comer, a cauda sai do lugar, então ela não conta como obstáculo.
+    const body = eating ? state.snake : state.snake.slice(0, -1);
+    if (body.some(s => s.x === nx && s.y === ny)) {
+      return finish('Fim de jogo', 'Você bateu em si mesma. Pontos: ' + state.score + '.');
+    }
+
+    state.snake.unshift({ x: nx, y: ny });
+    if (eating) {
+      state.score++;
+      state.food = spawnFood();
+      updateScore();
+      if (!state.food) {
+        return finish('Você venceu!', 'A cobrinha ocupou todo o tabuleiro. Pontos: ' + state.score + '.');
+      }
+    } else {
+      state.snake.pop();
+    }
+    draw();
+  }
+
+  function queueDir(dir) {
+    if (state.status === 'over') return;
+    if (state.status === 'paused') return;
+    const ref = pending.length ? pending[pending.length - 1] : state.dir;
+    if (!isSame(dir, ref) && !isOpposite(dir, ref) && pending.length < 2) pending.push(dir);
+    if (state.status === 'ready') {
+      // No início, a primeira direção válida já vale na hora.
+      if (pending.length) {
+        const d = pending.shift();
+        if (!isOpposite(d, state.dir)) state.dir = d;
+      }
+      start();
+    }
+  }
+
+  function draw() {
+    ctx.fillStyle = '#0d1117';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = '#1c2330';
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        ctx.beginPath();
+        ctx.arc(x * CELL + CELL / 2, y * CELL + CELL / 2, 1.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    if (state.food) {
+      ctx.fillStyle = '#f85149';
+      ctx.beginPath();
+      ctx.arc(state.food.x * CELL + CELL / 2, state.food.y * CELL + CELL / 2, CELL * 0.33, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const n = state.snake.length;
+    state.snake.forEach((s, i) => {
+      const t = n > 1 ? i / (n - 1) : 0;
+      // Cabeça mais clara, cauda mais escura.
+      const r = Math.round(158 - t * 102);
+      const g = Math.round(203 - t * 64);
+      const b = Math.round(255 - t * 2);
+      ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+      roundRect(s.x * CELL + 2, s.y * CELL + 2, CELL - 4, CELL - 4, 6);
+      ctx.fill();
+    });
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  const KEYS = {
+    ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+    w: 'up', W: 'up', s: 'down', S: 'down', a: 'left', A: 'left', d: 'right', D: 'right'
+  };
+
+  document.addEventListener('keydown', function (e) {
+    if (KEYS[e.key]) {
+      e.preventDefault();
+      queueDir(DIRS[KEYS[e.key]]);
+    } else if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      if (state.status === 'ready' || state.status === 'over') start();
+      else togglePause();
+    }
+  });
+
+  document.querySelectorAll('.dpad button').forEach(function (btn) {
+    btn.addEventListener('click', function () { queueDir(DIRS[btn.dataset.dir]); });
+  });
+
+  overlay.addEventListener('click', function () {
+    if (state.status === 'paused') togglePause();
+    else start();
+  });
+
+  let touchStart = null;
+  const board = document.getElementById('board');
+  board.addEventListener('touchstart', function (e) {
+    const t = e.changedTouches[0];
+    touchStart = { x: t.clientX, y: t.clientY };
+  }, { passive: true });
+  board.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
+  board.addEventListener('touchend', function (e) {
+    if (!touchStart) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStart.x;
+    const dy = t.clientY - touchStart.y;
+    touchStart = null;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+    if (Math.abs(dx) > Math.abs(dy)) queueDir(dx > 0 ? DIRS.right : DIRS.left);
+    else queueDir(dy > 0 ? DIRS.down : DIRS.up);
+  });
+
+  reset();
+</script>
+</body>
+</html>
